@@ -1,6 +1,6 @@
-// ClearCopy v0.1 - serverless page checker
+// ClearCopy v0.2 - serverless page checker
 const COMMON={teh:"the",recieve:"receive",seperate:"separate",definately:"definitely",occured:"occurred",untill:"until",wich:"which",accomodate:"accommodate",alot:"a lot",thier:"their",becuase:"because",enviroment:"environment",neccessary:"necessary",begining:"beginning",independant:"independent",noticable:"noticeable",succesful:"successful",tommorow:"tomorrow",writting:"writing"};
-const strip=h=>h.replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/\s+/g," ").trim();
+const strip=h=>h.replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&#0?39;|&rsquo;|&lsquo;|&apos;/g,"'").replace(/&quot;|&ldquo;|&rdquo;/g,'"').replace(/&mdash;|&ndash;/g," - ").replace(/&amp;/g,"&").replace(/&#?[a-z0-9]+;/gi," ").replace(/\s+/g," ").trim();
 function syl(w){w=w.toLowerCase().replace(/[^a-z]/g,"");if(w.length<=3)return 1;w=w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/,"").replace(/^y/,"");const m=w.match(/[aeiouy]{1,2}/g);return m?m.length:1;}
 function analyze(html,url){
  const issues=[];const add=(sev,type,msg,fix)=>issues.push({sev,type,msg,fix});
@@ -14,7 +14,7 @@ function analyze(html,url){
  for(const[b,g]of Object.entries(COMMON)){const n=lw.filter(w=>w===b).length;if(n)add("med","spelling",`"${b}" x${n}`,`Change to "${g}".`);}
  const d=[...new Set((text.match(/\b([a-z]+)\s+\1\b/gi)||[]).map(x=>x.toLowerCase()))].filter(x=>!/^(that that|had had)$/.test(x));
  d.slice(0,10).forEach(x=>add("med","grammar",`Repeated word: "${x}"`,"Remove the duplicate."));
- if(/\w\s+[,;!?](\s|$)/.test(text))add("low","punctuation","Space before punctuation","Remove the space.");
+ if(/[A-Za-z]\s+[,;!?.](\s|$)/.test(text))add("low","punctuation","Space before punctuation","Remove the space.");
  const ai=html.search(/href=["'][^"']*(amzn\.to|amazon\.[a-z.]+\/)/i);
  if(ai>=0){const re=/(affiliate|amazon associate|may earn|commission)/i;
   if(!re.test(text))add("high","disclosure","Amazon links but no affiliate disclosure","Add a disclosure before the first affiliate link.");
@@ -28,10 +28,14 @@ function analyze(html,url){
  const pen={high:15,med:6,low:2};
  return{url,title,wordCount:words.length,readingGrade:g,score:Math.max(0,100-issues.reduce((a,i)=>a+pen[i.sev],0)),issues};
 }
-const UA={headers:{"user-agent":"ClearCopyBot/0.1"},redirect:"follow"};
+const UA=()=>({headers:{"user-agent":"ClearCopyBot/0.2"},redirect:"follow",signal:AbortSignal.timeout(9000)});
+const PRIV=/^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[?::1\]?$)/i;
+function okUrl(u){let p;try{p=new URL(u);}catch(e){return false;}return /^https?:$/.test(p.protocol)&&!PRIV.test(p.hostname);}
+async function locs(sm,depth){if(!okUrl(sm))throw new Error("bad sitemap url");const x=await(await fetch(sm,UA())).text();const l=[...x.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map(m=>m[1].replace(/&amp;/g,"&"));
+ if(/<sitemapindex/i.test(x)&&depth<1){let out=[];for(const c of l.slice(0,5))out=out.concat(await locs(c,depth+1));return out;}return l;}
 module.exports=async(req,res)=>{try{const q=req.query||{};let urls=q.url?[q.url]:[];
- if(q.sitemap){const x=await(await fetch(q.sitemap,UA)).text();urls=[...x.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map(m=>m[1]).slice(0,Math.min(+q.limit||20,40));}
+ if(q.sitemap){urls=[...new Set(await locs(q.sitemap,0))].slice(0,Math.min(Math.max(+q.limit||20,1),40));}
  if(!urls.length)return res.status(400).json({error:"Pass ?url= or ?sitemap="});
- const results=await Promise.all(urls.map(async u=>{try{if(!/^https?:\/\//.test(u))throw new Error("bad url");const r=await fetch(u,UA);if(!r.ok)return{url:u,error:"HTTP "+r.status};return analyze(await r.text(),u);}catch(e){return{url:u,error:String(e.message||e)};}}));
+ const results=await Promise.all(urls.map(async u=>{try{if(!okUrl(u))throw new Error("bad url (use a public http/https address)");const r=await fetch(u,UA());if(!r.ok)return{url:u,error:"HTTP "+r.status};return analyze(await r.text(),u);}catch(e){return{url:u,error:String(e.message||e)};}}));
  res.setHeader("cache-control","no-store");res.json({checked:results.length,results});}catch(e){res.status(500).json({error:String(e.message||e)});}};
 module.exports.analyze=analyze;
